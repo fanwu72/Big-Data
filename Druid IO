@@ -1,0 +1,19 @@
+Druid本质是TSDB(时序数据库)，通过时间粒度和维度预聚合的方式来减少数据量。适合固定场景查询。
+Druid能提供GroupBy, TimeSeries, Select, TopN(近似值)等查询功能。
+支持实时入库。 Realtime节点基本废弃不用，换成Overlord-MiddleManager-Peon架构的Index节点。实时入库需要指定时间窗口，窗口外的数据将被丢弃。
+实时入库的worker(peon)会把segent granularity + 时间窗口 内的数据全部缓存在内存中， 到期后刷入磁盘，通过ZK通知History节点handover。
+经过观察（未验证），缓存在内存中的实时数据并没有预聚合（查询时屏蔽），而是在落盘时做预聚合。因此落盘时需要大量的机器资源。
+实时数据的查询会被broker转发到peon中，由poen提供数据。历史数据的查询会被转发到history节点，history节点在本地查询热数据，HDFS查询冷数据。
+Druid的时间粒度预聚合理论上可以偏移任意分钟（比如2-7分聚合成一个5分钟点），然而容易遇到时区和segment granularity的坑，不建议这样做。
+批量入库同样使用Index节点的架构， 依赖hadoop的MR（也可以不依赖，但推荐使用MR）。
+Index节点的架构不够high level（请参考yarn），因此一般使用tranquility（以下简称TQ）进行入库配置。
+TQ作为index节点的客户端，封装了index节点中任务的启停和调度，简化了入库操作。
+TQ由scala编写，可以独立运行，也可以作为library嵌入程序中（比如spark）。团队使用tranquility-kafka从kafka消费实时数据写入。
+可以起多个TQ同时写入同一组index task, 保证TQ的高可用。
+Index task挂掉无法恢复，需要做副本（猜测是双写）。
+Druid作为一个olap系统，对小数据量的查询和聚合响应很快，可以达到几十毫秒级别。大数据量的查询也能在秒级返回。
+Druid使用倒排索引，因此查询速度很快，且没有树结构的index的顺序问题。tradeoff是存储的数据量较大。
+Druid不支持随机写，实时数据落盘后，只能整个segment修改。有update需求慎用。
+由于Druid实时入库会丢数据，因此一般一天会做一次批量来覆盖前一天的数据，保证准确性。
+Druid没有WAL，重要数据慎用。
+Druid依赖Zookeeper，需要保证ZK的绝对稳定，建议单独搭一个ZK.
