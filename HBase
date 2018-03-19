@@ -1,0 +1,26 @@
+列式存储， 原生不支持sql。 适合顺序扫描(scan)和点查(get)
+原生不支持二级索引，需要结合查询场景设计主键。不使用主键的原生Filter效率很低，多个Filter结合使用更慢，几乎不可用。
+适合写多读少的场景，并发场景下单机可支撑十万以上的读写吞吐量。由于读写不依赖Master，几乎可以线性扩展。
+采用LSM-like数据结构，写入时数据落在Memstore,开销主要在WAL，延迟较低。
+读取需要归并Memstore和数个Storefiles, 延迟在毫秒级别，总体比关系型数据库稍慢。
+Storefiles的数据以block的形式，以压缩或不压缩的方式缓存在blockcache中，大查询如果不命中blockcache, 将会产生大量io, 速度较慢。推荐超大查询不经过缓存。
+Blockcache推荐使用BucketCache的堆外配置, 或者直接映射到内存盘，可以有效提高稳定性，减少GC。
+Region的compact需要大量内存复制和磁盘io。 major compact由于需要做数据合并，还消耗cpu。一般推荐在半夜业务压力较低时手动触发。
+为了防止读写热点，往往需要做salting（phoenix）。
+HBase在做一些操作（如compact, region split, region merge）时需要短暂锁region(一般是毫秒级)，此时客户端查询会出现异常。然而一般的客户端都有重试机制，用户只会感受到查询变慢。
+HBase是强一致性，但通过配置read replica可以成为最终一致性而提升读可用性。
+HBase的修表操作(hbck)有风险，尤其是对meta表的操作可能会造成数据丢失。由于region缺乏业务含义，修表带来的数据丢失会产生无法预料的后果，建议重要数据不要存放在HBase中。
+HBase可以通过bloom filter(默认打开)来过滤一些肯定不存在的数据， 提高scan性能。同理它也可以通过timestamp来过滤文件以提升查询速度。
+HBase可以通过coprocessor来实现二级索引(phoenix)。
+HBase写请求过于集中容易导致RS负载过高挂掉，这时需要手动移动或拆分Region。
+可以通过customize负载均衡器来实现自定义的负载均衡（实现了根据gc情况和最近读写量进行region分配）。
+HBase有数据多版本的设计，天生具有MVCC, 读写不互锁，但代价是定期compact和归并读。
+HBase的WAL直接写入HDFS,但通过HDFS的客户端，但本地有数据副本时可以直接读写本地磁盘的HDFS数据文件，所以实际不经过网络。
+实际数据缓存在Memstore中，定期批量刷入HDFS，对HDFS没有修改操作。数据文件依赖HDFS的副本机制保证可靠性。
+由于WAL一般不会打开最高可靠级别，因此只能保证数据写入文件系统（缓存），不一定会真正落盘。因此当机仍然存在一定风险。
+RS的恢复过程依赖ZK临时节点超时机制，还需要WAL split, WAL replay等过程，当RS的region多且写入量大时，RS的重新上线可能需要分钟级别。期间部分数据不可用。
+Master可以理解为只负责RS的运维操作，master节点的failure不会影响正常读写。
+HBase的元数据存在ZK中，读数据的时候会访问并缓存ZK的数据，因此需要保持ZK绝对稳定。
+
+团队使用的通用HBase集群约有40台RS，单台约有180个region, 平均写入400k/s, 峰值最高达到2000k/s。读请求大多为Scan。
+专用HBase集群有6台RS, 支持15k/s的写入量和多条件SQL聚合查询（Phoenix）, 平均响应时间能在亚秒级。
