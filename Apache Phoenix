@@ -1,0 +1,15 @@
+底层深度依赖HBase，可以说是SQL on HBase的实现。
+Phoenix可以不架设QueryServer,完全依附在RegionServer，通过Phoenix JDBC进行客户端的SQL转HBase Scan操作。
+Phoenix的设计目标是OLTP, 实现了一部分的事务(Apache Tephra)和二级索引(coprocessor)。
+Phoenix的服务端jar包中包含HBase coprocessor,会拦截来自phoenix客户端的hbase查询(通过scan中的属性判断)，然后在RS端转成SkipScan Filter进行查询。
+Phoenix支持TIMELINE查询(read replica)，可以配置在jdbc连接串或者jdbc属性中。
+Phoenix的SQL解析依赖ANTLR3, 如果使用Fat JDBC client, 需要在客户端做SQL的分词、语法树构建、执行计划制定和优化、并发Scan, 迭代结果等操作，客户端行为较重。
+Phoenix可以进行毫秒级的小查询和秒级的大查询。超过分钟的查询不建议使用（换存储架构）。
+Phoenix使用了SkipScan Filter来高效地进行大量点查, 使用自动Salting的方式来减少读写热点。
+
+Phoenix的客户端读过程包括:
+SQL语句词法分析->语法树构建(以上两步基于ANTLR3)->制定执行计划->通过统计数据和优化策略优化查询计划->并发执行Scan->JDBC的ResutSet迭代中拉取Scan的结果
+服务端读过程包括:
+RS接收到新Scan（或老Scan的scanId）->coprocess拦截scan,转化成自己的skip scan（需要对column进行decode, 有时出现异常）->查询到数据，返回。
+
+团队直接使用Phoenix的Fat JDBC来操作HBase, 提供响应时间要求较高，入库量较大的oltp查询和小型的聚合操作。
