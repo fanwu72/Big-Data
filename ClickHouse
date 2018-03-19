@@ -1,0 +1,16 @@
+ClickHouse是俄罗斯搜索公司开源的olap系统，c++实现，特点是使用向量化技术(vectorwise)，可以将数据加载进内存，进行快速olap分析。
+ClickHouse支持SQL-like语法，不支持高并发insert。推荐一秒内insert不超过一次（一次insert会在ZK上创建多个节点，看着办吧），但一次可以有多条。
+ClickHouse支持多种引擎，Log类引擎适合临时数据， MergeTree引擎家族是中流砥柱。 Merge引擎可以联合多张Log类的表, Distributed引擎可以为MergeTree提供分布式支持。
+ClickHouse的MergeTree是主要存储引擎，数据在写入时提前排序，提高查询速度。ClickHouse的批量写入速度极快，单机非常容易达到20k-50k/s的写入。
+Distributed引擎可以将多个机器上的MergeTree表联合一起成为一张分布式表。需要先配置集群信息，通过定义宏(macro)来制定layer,shard,replica。
+Distributed的集群以机器+端口为粒度， 一个运行实例保存一个shard的单个副本。 然而集群又是表级别的配置，因此不同的表可以使用不同的集群配置来合理利用资源。
+Distributed一个特点是不记录数据的具体位置。一个查询会被分发到所有的shard里面去查，不管这个shard到底有没有数据，因此不适合高并发小查询。
+上述特点带来的好处是，写入时可以直接往本地表写，而不用在意数据的哈希问题（因为根本不需要哈希），因此写入非常快。
+MergeTree家族有带Replicated前缀的引擎，可以实现数据的副本。 这种副本没有主副之分，可以双向复制。
+MergeTree有Replacing和Aggragation引擎，可以实现Merge时数据的替换和累加。
+看起来能实现update和预聚合，然而Merge操作实时性很差，基本不能依赖这两种引擎的update和increment操作（这点不如Baidu Palo）。
+MergeTree以月为物理分区，Date为逻辑分区，包含主键和索引粒度。经验证，基数小的主键值不传也可以自动加上，索引粒度小适合点查，大适合范围查询。
+ClickHouse在不使用主键的情况下查询也很快！
+ClickHouse支持几百种分析函数。
+
+团队使用的ClickHouse主要作为冷数据（不支持update）的存储，提供月级别跨度的大查询支持。
